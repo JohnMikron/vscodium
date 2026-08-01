@@ -1,0 +1,98 @@
+name: Llama.cpp Integration Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'patches/90-llama-cpp-integration.patch'
+      - 'product.json'
+      - 'docs/llama-cpp-integration.md'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'patches/90-llama-cpp-integration.patch'
+      - 'product.json'
+
+jobs:
+  test-llama-cpp-config:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate product.json
+        run: |
+          echo "Validating product.json syntax..."
+          if ! python3 -m json.tool product.json > /dev/null 2>&1; then
+            echo "❌ Invalid JSON in product.json"
+            exit 1
+          fi
+          echo "✅ product.json is valid JSON"
+          
+      - name: Check llamaCppSupport configuration
+        run: |
+          echo "Checking llamaCppSupport configuration..."
+          if ! grep -q '"llamaCppSupport"' product.json; then
+            echo "❌ llamaCppSupport not found in product.json"
+            exit 1
+          fi
+          echo "✅ llamaCppSupport configuration present"
+          
+      - name: Validate patch file exists
+        run: |
+          if [ ! -f "patches/90-llama-cpp-integration.patch" ]; then
+            echo "❌ Llama.cpp integration patch not found"
+            exit 1
+          fi
+          echo "✅ Patch file exists"
+          
+      - name: Check documentation
+        run: |
+          if [ ! -f "docs/llama-cpp-integration.md" ]; then
+            echo "❌ Documentation not found"
+            exit 1
+          fi
+          echo "✅ Documentation present"
+
+  test-build-integrity:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          npm install -g yarn
+          yarn install --frozen-lockfile || true
+          
+      - name: Validate patches
+        run: |
+          echo "Validating patch files..."
+          for patch in patches/*.patch; do
+            if [ -f "$patch" ]; then
+              echo "Checking $patch..."
+              if ! head -5 "$patch" | grep -q "^diff"; then
+                echo "⚠️  Warning: $patch may not be a valid patch file"
+              fi
+            fi
+          done
+          echo "✅ Patch validation complete"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Security check for experimental features
+        run: |
+          echo "Checking for security warnings in code..."
+          if grep -r "EXPERIMENTAL" patches/ 2>/dev/null; then
+            echo "⚠️  Experimental features detected - ensure proper warnings are in place"
+          fi
+          echo "✅ Security scan complete"

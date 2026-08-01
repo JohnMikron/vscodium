@@ -461,7 +461,30 @@
       "resolvers",
       "contribRemoteHelp",
       "contribViewsRemote"
+    ],
+    "llama.cpp.llama-cpp-python": [
+      "chatProvider",
+      "languageModelSystem",
+      "languageModelCapabilities"
     ]
+  },
+  "llamaCppSupport": {
+    "enabled": true,
+    "defaultModelPath": "",
+    "supportedQuantizations": ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"],
+    "maxContextSize": 262144,
+    "gpuAcceleration": true,
+    "nThreads": 0,
+    "nBatch": 512,
+    "nCtx": 65536,
+    "nGpuLayers": 99,
+    "enableThinking": true,
+    "enableMultimodal": true
+  },
+  "offlineMode": {
+    "enabled": false,
+    "disableExtensions": false,
+    "disableGallery": false
   },
   "extensionKind": {
     "Shan.code-settings-sync": [
