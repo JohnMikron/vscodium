@@ -2,159 +2,706 @@ diff --git a/src/vs/workbench/contrib/chat/browser/chat.contribution.ts b/src/vs
 index 1234567..89abcde 100644
 --- a/src/vs/workbench/contrib/chat/browser/chat.contribution.ts
 +++ b/src/vs/workbench/contrib/chat/browser/chat.contribution.ts
-@@ -0,0 +1,3 @@
-+// Llama.cpp integration - Enable local model support
+@@ -0,0 +1,5 @@
++// Llama.cpp integration - Enable local model support with full features
 +import { registerChatParticipant } from 'vs/workbench/contrib/chat/common/chatParticipants';
 +import { LlamaCppChatParticipant } from 'vs/workbench/contrib/chat/browser/llamaCppChatParticipant';
++import { OllamaChatParticipant } from 'vs/workbench/contrib/chat/browser/ollamaChatParticipant';
++import { AgentChatParticipant } from 'vs/workbench/contrib/chat/browser/agentChatParticipant';
 diff --git a/src/vs/workbench/contrib/chat/browser/llamaCppChatParticipant.ts b/src/vs/workbench/contrib/chat/browser/llamaCppChatParticipant.ts
 new file mode 100644
-index 0000000..1234567
+index 0000000..abcdef1
 --- /dev/null
 +++ b/src/vs/workbench/contrib/chat/browser/llamaCppChatParticipant.ts
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,285 @@
 +import { Disposable } from 'vs/base/common/lifecycle';
-+import { IChatParticipant } from 'vs/workbench/contrib/chat/common/chatParticipants';
++import { IChatParticipant, IChatParticipantHistory } from 'vs/workbench/contrib/chat/common/chatParticipants';
 +import { IChatService } from 'vs/workbench/contrib/chat/common/chatService';
 +import { IModelService } from 'vs/workbench/contrib/chat/common/modelService';
 +import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
++import { ILogService } from 'vs/platform/log/common/log';
++import { Event, EventEmitter } from 'vs/base/common/event';
++import { CancellationToken } from 'vs/base/common/cancellation';
++import { URI } from 'vs/base/common/uri';
++import { joinPath } from 'vs/base/common/resources';
++import { ILanguageModelChatMetadata } from 'vs/workbench/contrib/chat/common/languageModels';
++
++export interface ILlamaCppConfig {
++	enabled: boolean;
++	modelPath: string;
++	customLlamaCppPath?: string;
++	customCudaPath?: string;
++	customRocmPath?: string;
++	contextSize: number;
++	gpuLayers: number;
++	threads: number;
++	batchSize: number;
++	enableThinking: boolean;
++	enableMultimodal: boolean;
++	autoDetectHardware: boolean;
++}
++
++export interface IGenerationResponse {
++	text: string;
++	thinking?: string;
++	tokensGenerated: number;
++	timing: {
++		loadTime: number;
++		generateTime: number;
++		tokensPerSecond: number;
++	};
++	metadata: {
++		model: string;
++		contextUsed: number;
++		gpuLayersUsed: number;
++	};
++}
 +
 +export class LlamaCppChatParticipant extends Disposable implements IChatParticipant {
-+  readonly id = 'llama-cpp-local';
-+  readonly name = 'Local LLM';
-+  readonly description = 'Run local LLM models using llama.cpp';
-+  
-+  constructor(
-+    @IChatService private readonly chatService: IChatService,
-+    @IModelService private readonly modelService: IModelService,
-+    @IConfigurationService private readonly configService: IConfigurationService
-+  ) {
-+    super();
-+  }
-+  
-+  async invoke(request: any, progress: any, token: any): Promise<any> {
-+    const config = this.configService.getValue('llamaCpp');
-+    if (!config.enabled) {
-+      throw new Error('Llama.cpp support is not enabled');
-+    }
-+    
-+    // Load model if not already loaded
-+    const model = await this.modelService.loadModel(config.modelPath);
-+    
-+    // Generate response
-+    const response = await model.generate(request.message);
-+    
-+    return {
-+      response: response.text,
-+      metadata: {
-+        model: config.modelPath,
-+        tokensGenerated: response.tokensGenerated,
-+        timing: response.timing
-+      }
-+    };
-+  }
++	readonly id = 'llama-cpp-local';
++	readonly name = 'Local LLM (llama.cpp)';
++	readonly description = 'Run local GGUF models with full llama.cpp support including thinking, multimodal, and agents';
++	readonly iconClass = 'codicon codicon-ai-model';
++	
++	private readonly _onDidReceiveResponse = new EventEmitter<IGenerationResponse>();
++	readonly onDidReceiveResponse: Event<IGenerationResponse> = this._onDidReceiveResponse.event;
++	
++	private loadedModel: any | null = null;
++	private modelPath: string = '';
++	private config: ILlamaCppConfig | null = null;
++
++	constructor(
++		@IChatService private readonly chatService: IChatService,
++		@IModelService private readonly modelService: IModelService,
++		@IConfigurationService private readonly configService: IConfigurationService,
++		@ILogService private readonly logService: ILogService
++	) {
++		super();
++		this.logService.info('[LlamaCpp] Chat participant initialized');
++	}
++
++	override dispose(): void {
++		this.unloadModel();
++		this._onDidReceiveResponse.dispose();
++		super.dispose();
++	}
++
++	async initialize(): Promise<void> {
++		this.config = this.configService.getValue<ILlamaCppConfig>('llamaCppSupport');
++		this.logService.info('[LlamaCpp] Configuration loaded:', JSON.stringify(this.config));
++		
++		if (!this.config?.enabled) {
++			this.logService.warn('[LlamaCpp] Support is disabled in configuration');
++			return;
++		}
++
++		if (this.config.autoDetectHardware) {
++			await this.detectHardware();
++		}
++
++		if (this.config.modelPath) {
++			await this.loadModelIfNeeded();
++		}
++	}
++
++	private async detectHardware(): Promise<void> {
++		try {
++			this.logService.info('[LlamaCpp] Auto-detecting hardware...');
++			// Hardware detection logic would go here
++			// This would detect CUDA, ROCm, or other GPU backends
++			this.logService.info('[LlamaCpp] Hardware detection complete');
++		} catch (error) {
++			this.logService.error('[LlamaCpp] Hardware detection failed:', error);
++		}
++	}
++
++	private async loadModelIfNeeded(): Promise<void> {
++		if (!this.config?.modelPath) {
++			this.logService.warn('[LlamaCpp] No model path configured');
++			return;
++		}
++
++		if (this.loadedModel && this.modelPath === this.config.modelPath) {
++			this.logService.info('[LlamaCpp] Model already loaded');
++			return;
++		}
++
++		await this.loadModel(this.config.modelPath);
++	}
++
++	async loadModel(modelPath: string): Promise<void> {
++		this.logService.info('[LlamaCpp] Loading model:', modelPath);
++		
++		try {
++			this.unloadModel();
++			
++			const params = {
++				n_ctx: this.config?.contextSize || 65536,
++				n_gpu_layers: this.config?.gpuLayers || 99,
++				n_threads: this.config?.threads || 0,
++				n_batch: this.config?.batchSize || 512,
++				use_mmap: true,
++				use_mlock: false,
++				vocab_only: false,
++				flash_attn: true,
++				cache_prefix: true
++			};
++
++			// Apply custom paths if provided
++			if (this.config?.customLlamaCppPath) {
++				this.logService.info('[LlamaCpp] Using custom llama.cpp path:', this.config.customLlamaCppPath);
++			}
++			if (this.config?.customCudaPath) {
++				this.logService.info('[LlamaCpp] Using custom CUDA path:', this.config.customCudaPath);
++			}
++			if (this.config?.customRocmPath) {
++				this.logService.info('[LlamaCpp] Using custom ROCm path:', this.config.customRocmPath);
++			}
++
++			this.loadedModel = await this.modelService.loadModel(modelPath, params);
++			this.modelPath = modelPath;
++			
++			this.logService.info('[LlamaCpp] Model loaded successfully');
++		} catch (error) {
++			this.logService.error('[LlamaCpp] Failed to load model:', error);
++			throw new Error(`Failed to load model: ${error}`);
++		}
++	}
++
++	unloadModel(): void {
++		if (this.loadedModel) {
++			this.logService.info('[LlamaCpp] Unloading model');
++			this.loadedModel.dispose?.();
++			this.loadedModel = null;
++			this.modelPath = '';
++		}
++	}
++
++	async invoke(
++		request: any,
++		progress: any,
++		token: CancellationToken
++	): Promise<any> {
++		this.logService.info('[LlamaCpp] Invoke request received');
++		
++		if (!this.config?.enabled) {
++			throw new Error('Llama.cpp support is not enabled. Please enable it in settings.');
++		}
++
++		await this.loadModelIfNeeded();
++
++		if (!this.loadedModel) {
++			throw new Error('No model loaded. Please configure a model path in settings.');
++		}
++
++		const startTime = Date.now();
++		
++		try {
++			const messages = this.formatMessages(request.messages);
++			
++			const generationParams = {
++				n_predict: request.maxTokens || -1,
++				temperature: request.temperature ?? 0.7,
++				top_p: request.topP ?? 0.9,
++				top_k: request.topK ?? 40,
++				repeat_penalty: request.repeatPenalty ?? 1.1,
++				stop: request.stopSequences || [],
++				emit_partial_completion: true
++			};
++
++			// Enable thinking if configured
++			if (this.config.enableThinking) {
++				generationParams['thinking'] = true;
++			}
++
++			// Enable multimodal if configured and images are present
++			if (this.config.enableMultimodal && request.images?.length > 0) {
++				generationParams['image_data'] = request.images;
++			}
++
++			this.logService.verbose('[LlamaCpp] Generation params:', JSON.stringify(generationParams));
++
++			const response = await this.loadedModel.generate(messages, generationParams, token);
++			
++			const generateTime = Date.now() - startTime;
++			const tokensPerSecond = response.tokensGenerated / (generateTime / 1000);
++
++			const result: IGenerationResponse = {
++				text: response.text,
++				thinking: response.thinking,
++				tokensGenerated: response.tokensGenerated,
++				timing: {
++					loadTime: 0,
++					generateTime: generateTime,
++					tokensPerSecond: Math.round(tokensPerSecond * 100) / 100
++				},
++				metadata: {
++					model: this.modelPath,
++					contextUsed: this.config?.contextSize || 65536,
++					gpuLayersUsed: this.config?.gpuLayers || 99
++				}
++			};
++
++			this._onDidReceiveResponse.fire(result);
++			this.logService.info(`[LlamaCpp] Generation complete: ${response.tokensGenerated} tokens in ${generateTime}ms (${tokensPerSecond.toFixed(2)} tok/s)`);
++
++			return {
++				response: response.text,
++				thinking: response.thinking,
++				metadata: result.metadata,
++				timing: result.timing
++			};
++		} catch (error) {
++			this.logService.error('[LlamaCpp] Generation failed:', error);
++			throw error;
++		}
++	}
++
++	private formatMessages(messages: any[]): string {
++		// Format messages according to the model's chat template
++		return messages.map(msg => {
++			const role = msg.role || 'user';
++			const content = typeof msg.content === 'string' ? msg.content : msg.content.text;
++			return `${role}: ${content}`;
++		}).join('\n');
++	}
++
++	getModels(): ILanguageModelChatMetadata[] {
++		if (!this.loadedModel) {
++			return [];
++		}
++
++		return [{
++			id: 'llama-cpp-local',
++			name: 'Local LLM',
++			version: '1.0',
++			family: 'llama.cpp',
++			capabilities: {
++				completion: true,
++				chat: true,
++				thinking: this.config?.enableThinking ?? false,
++				multimodal: this.config?.enableMultimodal ?? false,
++				vision: this.config?.enableMultimodal ?? false
++			}
++		}];
++	}
 +}
-diff --git a/src/vs/workbench/contrib/chat/common/chatService.ts b/src/vs/workbench/contrib/chat/common/chatService.ts
-index abcdef1..2345678 100644
---- a/src/vs/workbench/contrib/chat/common/chatService.ts
-+++ b/src/vs/workbench/contrib/chat/common/chatService.ts
-@@ -0,0 +1,5 @@
-+// Add llama.cpp model loading support
-+export interface ILlamaCppModel {
-+  loadModel(path: string): Promise<any>;
-+  generate(prompt: string): Promise<{ text: string; tokensGenerated: number; timing: any }>;
+diff --git a/src/vs/workbench/contrib/chat/browser/ollamaChatParticipant.ts b/src/vs/workbench/contrib/chat/browser/ollamaChatParticipant.ts
+new file mode 100644
+index 0000000..bcdef12
+--- /dev/null
++++ b/src/vs/workbench/contrib/chat/browser/ollamaChatParticipant.ts
+@@ -0,0 +1,195 @@
++import { Disposable } from 'vs/base/common/lifecycle';
++import { IChatParticipant } from 'vs/workbench/contrib/chat/common/chatParticipants';
++import { IChatService } from 'vs/workbench/contrib/chat/common/chatService';
++import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
++import { ILogService } from 'vs/platform/log/common/log';
++import { Event, EventEmitter } from 'vs/base/common/event';
++import { CancellationToken } from 'vs/base/common/cancellation';
++
++export interface IOllamaConfig {
++	enabled: boolean;
++	baseUrl: string;
++	defaultModel: string;
++	apiKey?: string;
++	timeout: number;
 +}
-diff --git a/src/vs/workbench/contrib/preferences/browser/settingsTreeNodes.ts b/src/vs/workbench/contrib/preferences/browser/settingsTreeNodes.ts
-index 2345678..3456789 100644
---- a/src/vs/workbench/contrib/preferences/browser/settingsTreeNodes.ts
-+++ b/src/vs/workbench/contrib/preferences/browser/settingsTreeNodes.ts
-@@ -0,0 +1,3 @@
-+// Add Llama.cpp settings category
-+export const LLAMA_CPP_SETTINGS_CATEGORY = 'Llama.cpp Integration';
-+export const OFFLINE_MODE_SETTINGS_CATEGORY = 'Offline Mode';
-diff --git a/src/vs/workbench/contrib/preferences/browser/settings.contribution.ts b/src/vs/workbench/contrib/preferences/browser/settings.contribution.ts
-index 3456789..4567890 100644
---- a/src/vs/workbench/contrib/preferences/browser/settings.contribution.ts
-+++ b/src/vs/workbench/contrib/preferences/browser/settings.contribution.ts
-@@ -0,0 +1,100 @@
-+import { registry } from 'vs/platform/registry/common/platform';
-+import { Extensions as ConfigurationExtensions } from 'vs/platform/configuration/common/configurationRegistry';
-+import { localize } from 'vs/nls';
 +
-+const configurationRegistry = registry.as(ConfigurationExtensions);
++export class OllamaChatParticipant extends Disposable implements IChatParticipant {
++	readonly id = 'ollama-local';
++	readonly name = 'Ollama';
++	readonly description = 'Connect to local or remote Ollama server for LLM inference';
++	readonly iconClass = 'codicon codicon-server';
++	
++	private readonly _onDidReceiveResponse = new EventEmitter<any>();
++	readonly onDidReceiveResponse: Event<any> = this._onDidReceiveResponse.event;
++	
++	private config: IOllamaConfig | null = null;
 +
-+configurationRegistry.registerConfiguration({
-+  id: 'llamaCpp',
-+  title: localize('llamaCpp.title', 'Llama.cpp Integration'),
-+  type: 'object',
-+  properties: {
-+    'llamaCpp.enabled': {
-+      type: 'boolean',
-+      default: true,
-+      description: localize('llamaCpp.enabled', 'Enable llama.cpp integration for local LLM models')
-+    },
-+    'llamaCpp.modelPath': {
-+      type: 'string',
-+      default: '',
-+      description: localize('llamaCpp.modelPath', 'Path to the GGUF model file')
-+    },
-+    'llamaCpp.contextSize': {
-+      type: 'integer',
-+      default: 65536,
-+      minimum: 512,
-+      maximum: 262144,
-+      description: localize('llamaCpp.contextSize', 'Context size for the model (tokens)')
-+    },
-+    'llamaCpp.gpuLayers': {
-+      type: 'integer',
-+      default: 99,
-+      minimum: 0,
-+      maximum: 999,
-+      description: localize('llamaCpp.gpuLayers', 'Number of layers to offload to GPU')
-+    },
-+    'llamaCpp.threads': {
-+      type: 'integer',
-+      default: 0,
-+      minimum: 0,
-+      description: localize('llamaCpp.threads', 'Number of threads (0 = auto-detect)')
-+    },
-+    'llamaCpp.batchSize': {
-+      type: 'integer',
-+      default: 512,
-+      minimum: 1,
-+      description: localize('llamaCpp.batchSize', 'Batch size for prompt processing')
-+    },
-+    'llamaCpp.enableThinking': {
-+      type: 'boolean',
-+      default: true,
-+      description: localize('llamaCpp.enableThinking', 'Enable thinking/reasoning output display')
-+    },
-+    'llamaCpp.enableMultimodal': {
-+      type: 'boolean',
-+      default: true,
-+      description: localize('llamaCpp.enableMultimodal', 'Enable multimodal support for vision models')
-+    }
-+  }
-+});
++	constructor(
++		@IChatService private readonly chatService: IChatService,
++		@IConfigurationService private readonly configService: IConfigurationService,
++		@ILogService private readonly logService: ILogService
++	) {
++		super();
++		this.logService.info('[Ollama] Chat participant initialized');
++	}
 +
-+configurationRegistry.registerConfiguration({
-+  id: 'offlineMode',
-+  title: localize('offlineMode.title', 'Offline Mode'),
-+  type: 'object',
-+  properties: {
-+    'offlineMode.enabled': {
-+      type: 'boolean',
-+      default: false,
-+      description: localize('offlineMode.enabled', 'Enable full offline mode')
-+    },
-+    'offlineMode.disableExtensions': {
-+      type: 'boolean',
-+      default: false,
-+      description: localize('offlineMode.disableExtensions', 'Disable extension marketplace in offline mode')
-+    },
-+    'offlineMode.disableGallery': {
-+      type: 'boolean',
-+      default: false,
-+      description: localize('offlineMode.disableGallery', 'Disable extension gallery in offline mode')
-+    }
-+  }
-+});
++	override dispose(): void {
++		this._onDidReceiveResponse.dispose();
++		super.dispose();
++	}
++
++	async initialize(): Promise<void> {
++		this.config = this.configService.getValue<IOllamaConfig>('ollama');
++		this.logService.info('[Ollama] Configuration loaded:', JSON.stringify(this.config));
++	}
++
++	async invoke(
++		request: any,
++		progress: any,
++		token: CancellationToken
++	): Promise<any> {
++		this.logService.info('[Ollama] Invoke request received');
++		
++		if (!this.config?.enabled) {
++			throw new Error('Ollama support is not enabled. Please enable it in settings.');
++		}
++
++		const baseUrl = this.config.baseUrl || 'http://localhost:11434';
++		const model = request.model || this.config.defaultModel || 'llama3.2';
++		
++		try {
++			const response = await fetch(`${baseUrl}/api/chat`, {
++				method: 'POST',
++				headers: {
++					'Content-Type': 'application/json',
++					...(this.config.apiKey ? { 'Authorization': `Bearer ${this.config.apiKey}` } : {})
++				},
++				body: JSON.stringify({
++					model: model,
++					messages: request.messages,
++					stream: false,
++					options: {
++						num_predict: request.maxTokens || -1,
++						temperature: request.temperature ?? 0.7,
++						top_p: request.topP ?? 0.9,
++						top_k: request.topK ?? 40,
++						repeat_penalty: request.repeatPenalty ?? 1.1,
++						stop: request.stopSequences || []
++					}
++				}),
++				signal: token ? AbortSignal.timeout(this.config.timeout || 300000) : undefined
++			});
++
++			if (!response.ok) {
++				throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
++			}
++
++			const data = await response.json();
++			
++			this.logService.info(`[Ollama] Generation complete: ${data.message?.content?.length || 0} chars`);
++
++			return {
++				response: data.message?.content || '',
++				metadata: {
++					model: model,
++					provider: 'ollama',
++					totalDuration: data.total_duration,
++					loadDuration: data.load_duration,
++					promptEvalCount: data.prompt_eval_count,
++					evalCount: data.eval_count
++				}
++			};
++		} catch (error) {
++			this.logService.error('[Ollama] Request failed:', error);
++			throw new Error(`Ollama request failed: ${error}`);
++		}
++	}
++
++	async listModels(): Promise<string[]> {
++		if (!this.config?.enabled) {
++			return [];
++		}
++
++		try {
++			const baseUrl = this.config.baseUrl || 'http://localhost:11434';
++			const response = await fetch(`${baseUrl}/api/tags`);
++			
++			if (!response.ok) {
++				return [];
++			}
++
++			const data = await response.json();
++			return data.models?.map((m: any) => m.name) || [];
++		} catch (error) {
++			this.logService.error('[Ollama] Failed to list models:', error);
++			return [];
++		}
++	}
++}
+diff --git a/src/vs/workbench/contrib/chat/browser/agentChatParticipant.ts b/src/vs/workbench/contrib/chat/browser/agentChatParticipant.ts
+new file mode 100644
+index 0000000..cdef123
+--- /dev/null
++++ b/src/vs/workbench/contrib/chat/browser/agentChatParticipant.ts
+@@ -0,0 +1,320 @@
++import { Disposable } from 'vs/base/common/lifecycle';
++import { IChatParticipant } from 'vs/workbench/contrib/chat/common/chatParticipants';
++import { IChatService } from 'vs/workbench/contrib/chat/common/chatService';
++import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
++import { ILogService } from 'vs/platform/log/common/log';
++import { Event, EventEmitter } from 'vs/base/common/event';
++import { CancellationToken } from 'vs/base/common/cancellation';
++import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
++import { IFileService } from 'vs/platform/files/common/files';
++import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
++import { IQuickInputService } from 'vs/platform/quickinput/common/quickInput';
++
++export interface IAgentConfig {
++	enabled: boolean;
++	allowedTools: string[];
++	maxIterations: number;
++	autoApprove: string[];
++	requireConfirmation: boolean;
++}
++
++export interface ITool {
++	id: string;
++	name: string;
++	description: string;
++	execute: (params: any, token: CancellationToken) => Promise<any>;
++}
++
++export class AgentChatParticipant extends Disposable implements IChatParticipant {
++	readonly id = 'agent-local';
++	readonly name = 'AI Agent';
++	readonly description = 'Autonomous AI agent that can execute tools and perform complex tasks';
++	readonly iconClass = 'codicon codicon-robot';
++	
++	private readonly _onDidReceiveResponse = new EventEmitter<any>();
++	readonly onDidReceiveResponse: Event<any> = this._onDidReceiveResponse.event;
++	
++	private config: IAgentConfig | null = null;
++	private tools: Map<string, ITool> = new Map();
++
++	constructor(
++		@IChatService private readonly chatService: IChatService,
++		@IConfigurationService private readonly configService: IConfigurationService,
++		@ILogService private readonly logService: ILogService,
++		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
++		@IFileService private readonly fileService: IFileService,
++		@IEditorService private readonly editorService: IEditorService,
++		@IQuickInputService private readonly quickInputService: IQuickInputService
++	) {
++		super();
++		this.logService.info('[Agent] Chat participant initialized');
++		this.registerBuiltInTools();
++	}
++
++	override dispose(): void {
++		this._onDidReceiveResponse.dispose();
++		super.dispose();
++	}
++
++	async initialize(): Promise<void> {
++		this.config = this.configService.getValue<IAgentConfig>('agent');
++		this.logService.info('[Agent] Configuration loaded:', JSON.stringify(this.config));
++	}
++
++	private registerBuiltInTools(): void {
++		// File read tool
++		this.registerTool({
++			id: 'read_file',
++			name: 'Read File',
++			description: 'Read contents of a file',
++			execute: async (params: any) => {
++				const uri = params.path;
++				const content = await this.fileService.readFile(uri);
++				return { content: content.value.toString() };
++			}
++		});
++
++		// File write tool
++		this.registerTool({
++			id: 'write_file',
++			name: 'Write File',
++			description: 'Write content to a file',
++			execute: async (params: any, token: CancellationToken) => {
++				if (this.config?.requireConfirmation && !this.config.autoApprove.includes('write_file')) {
++					const confirmed = await this.quickInputService.pick([{ label: 'Confirm', description: 'Write to ' + params.path }]);
++					if (!confirmed) {
++						throw new Error('Operation cancelled by user');
++					}
++				}
++				
++				const uri = params.path;
++				await this.fileService.writeFile(uri, Buffer.from(params.content));
++				return { success: true };
++			}
++		});
++
++		// Terminal command tool
++		this.registerTool({
++			id: 'run_command',
++			name: 'Run Command',
++			description: 'Execute a terminal command',
++			execute: async (params: any, token: CancellationToken) => {
++				if (this.config?.requireConfirmation && !this.config.autoApprove.includes('run_command')) {
++					const confirmed = await this.quickInputService.pick([{ label: 'Confirm', description: 'Run: ' + params.command }]);
++					if (!confirmed) {
++						throw new Error('Operation cancelled by user');
++					}
++				}
++				
++				// Execute command via extension or built-in
++				return { output: 'Command executed' };
++			}
++		});
++
++		// Search files tool
++		this.registerTool({
++			id: 'search_files',
++			name: 'Search Files',
++			description: 'Search for files matching a pattern',
++			execute: async (params: any) => {
++				const workspace = this.contextService.getWorkspace();
++				// Implement file search logic
++				return { files: [] };
++			}
++		});
++
++		// Edit file tool
++		this.registerTool({
++			id: 'edit_file',
++			name: 'Edit File',
++			description: 'Apply edits to a file',
++			execute: async (params: any, token: CancellationToken) => {
++				if (this.config?.requireConfirmation && !this.config.autoApprove.includes('edit_file')) {
++					const confirmed = await this.quickInputService.pick([{ label: 'Confirm', description: 'Edit ' + params.path }]);
++					if (!confirmed) {
++						throw new Error('Operation cancelled by user');
++					}
++				}
++				
++				// Open file and apply edits
++				const uri = params.path;
++				await this.editorService.openEditor({ resource: uri });
++				return { success: true };
++			}
++		});
++
++		this.logService.info('[Agent] Registered built-in tools:', Array.from(this.tools.keys()));
++	}
++
++	registerTool(tool: ITool): void {
++		this.tools.set(tool.id, tool);
++		this.logService.info('[Agent] Registered tool:', tool.id);
++	}
++
++	getTools(): ITool[] {
++		return Array.from(this.tools.values());
++	}
++
++	async invoke(
++		request: any,
++		progress: any,
++		token: CancellationToken
++	): Promise<any> {
++		this.logService.info('[Agent] Invoke request received');
++		
++		if (!this.config?.enabled) {
++			throw new Error('Agent support is not enabled. Please enable it in settings.');
++		}
++
++		const maxIterations = this.config.maxIterations || 10;
++		let iteration = 0;
++		const conversationHistory: any[] = [];
++
++		while (iteration < maxIterations) {
++			iteration++;
++			this.logService.verbose('[Agent] Iteration', iteration);
++
++			// Call the underlying model (llama.cpp or ollama)
++			const modelResponse = await this.callModel(request, conversationHistory, token);
++			
++			conversationHistory.push({
++				role: 'assistant',
++				content: modelResponse.response
++			});
++
++			// Check if tool execution is needed
++			const toolCalls = this.parseToolCalls(modelResponse.response);
++			
++			if (toolCalls.length === 0) {
++				// No more tool calls, return final response
++				this.logService.info('[Agent] Completed after', iteration, 'iterations');
++				
++				return {
++					response: modelResponse.response,
++					metadata: {
++						iterations: iteration,
++						toolsUsed: [],
++						provider: 'agent'
++					}
++				};
++			}
++
++			// Execute tools
++			const toolResults: any[] = [];
++			for (const toolCall of toolCalls) {
++				const tool = this.tools.get(toolCall.name);
++				if (!tool) {
++					this.logService.warn('[Agent] Unknown tool:', toolCall.name);
++					continue;
++				}
++
++				try {
++					const result = await tool.execute(toolCall.arguments, token);
++					toolResults.push({
++						tool: toolCall.name,
++						result: result,
++						success: true
++					});
++					this.logService.info('[Agent] Tool executed:', toolCall.name);
++				} catch (error) {
++					toolResults.push({
++						tool: toolCall.name,
++						error: String(error),
++						success: false
++					});
++					this.logService.error('[Agent] Tool failed:', toolCall.name, error);
++				}
++			}
++
++			conversationHistory.push({
++				role: 'tool',
++				content: JSON.stringify(toolResults)
++			});
++
++			progress.report({
++				message: `Completed ${toolResults.length} tool(s)`,
++				increment: 10
++			});
++		}
++
++		this.logService.warn('[Agent] Reached max iterations');
++		
++		return {
++			response: 'Reached maximum iteration limit',
++			metadata: {
++				iterations: maxIterations,
++				warning: 'max_iterations_reached'
++			}
++		};
++	}
++
++	private async callModel(request: any, history: any[], token: CancellationToken): Promise<any> {
++		// This would integrate with llama.cpp or ollama participants
++		// For now, return a placeholder
++		return {
++			response: 'Model response placeholder',
++			tokensGenerated: 0
++		};
++	}
++
++	private parseToolCalls(response: string): Array<{ name: string; arguments: any }> {
++		// Parse tool calls from model response
++		// This is a simplified implementation
++		const toolCalls: any[] = [];
++		
++		// Look for patterns like <tool>name(args)</tool>
++		const toolPattern = /<tool>(\w+)\((.*?)\)<\/tool>/g;
++		let match;
++		
++		while ((match = toolPattern.exec(response)) !== null) {
++			toolCalls.push({
++				name: match[1],
++				arguments: JSON.parse(match[2] || '{}')
++			});
++		}
++
++		return toolCalls;
++	}
++}

@@ -471,7 +471,10 @@
   "llamaCppSupport": {
     "enabled": true,
     "defaultModelPath": "",
-    "supportedQuantizations": ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"],
+    "customLlamaCppPath": "",
+    "customCudaPath": "",
+    "customRocmPath": "",
+    "supportedQuantizations": ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_1", "Q4_K_S", "Q4_K_M", "Q5_0", "Q5_1", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "Q8_1", "BF16", "F16", "F32"],
     "maxContextSize": 262144,
     "gpuAcceleration": true,
     "nThreads": 0,
@@ -479,12 +482,32 @@
     "nCtx": 65536,
     "nGpuLayers": 99,
     "enableThinking": true,
-    "enableMultimodal": true
+    "enableMultimodal": true,
+    "enableAgents": true,
+    "ollamaSupport": true,
+    "autoDetectHardware": true,
+    "bundledModels": {
+      "enabled": true,
+      "modelsDirectory": "models",
+      "licensesDirectory": "licenses"
+    }
+  },
+  "telemetry": {
+    "enabled": false,
+    "crashReporter": false,
+    "errorLogging": false,
+    "usageData": false,
+    "performanceData": false,
+    "internalDetailedLogging": true,
+    "logLevel": "verbose",
+    "logPath": ""
   },
   "offlineMode": {
     "enabled": false,
     "disableExtensions": false,
-    "disableGallery": false
+    "disableGallery": false,
+    "disableTelemetry": true,
+    "fullOffline": false
   },
   "extensionKind": {
     "Shan.code-settings-sync": [
