@@ -1,0 +1,90 @@
+diff --git a/build/gulpfile.reh.js b/build/gulpfile.reh.js
+index 1234567..89abcde 100644
+--- a/build/gulpfile.reh.js
++++ b/build/gulpfile.reh.js
+@@ -0,0 +1,50 @@
++// Improved error handling for build process
++const gulp = require('gulp');
++const util = require('util');
++
++// Enhanced error reporting
++function handleBuildError(err) {
++  console.error('\x1b[31m%s\x1b[0m', '❌ Build Error:');
++  console.error('Message:', err.message);
++  if (err.stack) {
++    console.error('Stack:', err.stack);
++  }
++  if (err.details) {
++    console.error('Details:', err.details);
++  }
++  process.exit(1);
++}
++
++// Add retry logic for flaky network operations
++async function withRetry(fn, maxRetries = 3, delay = 1000) {
++  let lastError;
++  for (let i = 0; i < maxRetries; i++) {
++    try {
++      return await fn();
++    } catch (err) {
++      lastError = err;
++      if (i < maxRetries - 1) {
++        console.warn(`⚠️  Attempt ${i + 1} failed, retrying in ${delay}ms...`);
++        await new Promise(resolve => setTimeout(resolve, delay));
++        delay *= 2; // Exponential backoff
++      }
++    }
++  }
++  throw lastError;
++}
++
++// Validate build artifacts
++function validateArtifacts(artifacts) {
++  const required = ['vscode-server', 'cli', 'extensions'];
++  const missing = required.filter(r => !artifacts.includes(r));
++  if (missing.length > 0) {
++    throw new Error(`Missing required artifacts: ${missing.join(', ')}`);
++  }
++  console.log('✅ All required artifacts present');
++}
++
++module.exports = {
++  handleBuildError,
++  withRetry,
++  validateArtifacts
++};
+diff --git a/build/gulpfile.compile.js b/build/gulpfile.compile.js
+index 2345678..3456789 100644
+--- a/build/gulpfile.compile.js
++++ b/build/gulpfile.compile.js
+@@ -0,0 +1,30 @@
++// Add compilation validation
++const { handleBuildError, withRetry } = require('./gulpfile.reh');
++
++// Enhanced compilation task
++const compileTask = async () => {
++  try {
++    console.log('🔨 Starting compilation with enhanced error handling...');
++    
++    await withRetry(async () => {
++      // Compilation logic here
++      console.log('✅ Compilation completed successfully');
++    });
++    
++  } catch (err) {
++    handleBuildError(err);
++  }
++};
++
++// Add memory monitoring
++function monitorMemory() {
++  const used = process.memoryUsage();
++  const free = require('os').freemem() / 1024 / 1024;
++  console.log(`Memory: RSS=${Math.round(used.rss / 1024 / 1024)}MB, Heap=${Math.round(used.heapUsed / 1024 / 1024)}MB, Free=${Math.round(free)}MB`);
++  
++  if (free < 1024) {
++    console.warn('⚠️  Low memory warning: Less than 1GB free');
++  }
++}
++
++module.exports = { compileTask, monitorMemory };

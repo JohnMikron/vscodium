@@ -1,21 +1,71 @@
-vscode*
-VS*/*
-VSCode*
-VSCodium*
+```
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+target/
+.gradle/
+
+# Build artifacts
+build/
+dist/
+*.o
+*.obj
+*.out
+*.exe
+*.dll
+*.so
+*.a
+*.pyc
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# System
 .DS_Store
-*.env
-assets/
-build/linux/appimage/out
-build/linux/appimage/pkg2appimage.AppDir
-build/linux/appimage/pkg2appimage-*.AppImage
-build/linux/appimage/pkg2appimage.AppImage
-build/linux/appimage/squashfs-root
-build/linux/appimage/VSCodium
-build/windows/msi/releasedir
-build/windows/msi/Files*.wxs
-build/windows/msi/Files*.wixobj
-sourcemaps/
-stores/snapcraft/insider/*.snap
-stores/snapcraft/stable/*.snap
-font-size/node_modules/
-font-size/generate-css.js
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```
